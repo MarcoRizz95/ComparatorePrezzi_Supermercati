@@ -1,0 +1,88 @@
+import google.generativeai as genai
+from google.colab import files, auth, userdata
+import PIL.Image
+import json
+import gspread
+from google.auth import default
+
+# 1. AUTENTICAZIONE
+auth.authenticate_user()
+creds, _ = default()
+gc = gspread.authorize(creds)
+
+# 2. CONFIGURAZIONE AI
+API_KEY = "AIzaSyBIs5dhNAlEdbb7CQZ_MvXjct3ZWq-chDY"
+genai.configure(api_key=API_KEY)
+# Selezioniamo il modello (usando la logica di ricerca automatica)
+modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+modello_scelto = next((m for m in modelli if 'flash' in m.lower()), modelli[0])
+model = genai.GenerativeModel(modello_scelto)
+
+def analizza_con_normalizzazione():
+    try:
+        # --- A. APERTURA DATABASE E LETTURA PRODOTTI ESISTENTI ---
+        sh = gc.open("Database_Prezzi")
+        worksheet = sh.get_worksheet(0)
+        
+        # Prendiamo tutti i nomi prodotto già salvati per evitare duplicati "quasi uguali"
+        tutti_i_dati = worksheet.get_all_records()
+        prodotti_esistenti = list(set([r['Prodotto'] for r in tutti_i_dati]))
+        glossario_str = ", ".join(prodotti_esistenti)
+        
+        # --- B. CARICAMENTO IMMAGINE ---
+        print("--- CARICA LO SCONTRINO ---")
+        uploaded = files.upload()
+        if not uploaded: return
+        img = PIL.Image.open(list(uploaded.keys())[0])
+        
+        # --- C. PROMPT CON LOGICA DI NORMALIZZAZIONE ---
+        prompt = f"""
+        Analizza questo scontrino e restituisci un JSON pulito.
+        
+        LISTA PRODOTTI GIÀ ESISTENTI NEL DATABASE: [{glossario_str}]
+        
+        REGOLE DI NORMALIZZAZIONE:
+        1. Per ogni prodotto nello scontrino, controlla se assomiglia a uno nella 'LISTA PRODOTTI GIÀ ESISTENTI'.
+        2. Se esiste una corrispondenza (es. 'POM. DATT' -> 'Pomodoro Datterino'), USA IL NOME DELLA LISTA.
+        3. Se NON esiste, inventa un nome pulito, esteso e comprensibile in italiano.
+        
+        REGOLE SCONTI:
+        - Sottrai i valori negativi (sconti) al prodotto precedente.
+        
+        STRUTTURA JSON:
+        {{
+          "testata": {{ "insegna": "", "indirizzo": "", "p_iva": "", "data": "" }},
+          "prodotti": [
+            {{ "nome_pulito": "", "prezzo_pieno": 0.0, "sconto_applicato": 0.0, "prezzo_netto": 0.0, "is_offerta": true }}
+          ]
+        }}
+        """
+
+        print(f"Analisi intelligente in corso con {modello_scelto}...")
+        response = model.generate_content([prompt, img])
+        testo = response.text.strip().replace('```json', '').replace('```', '')
+        dati = json.loads(testo)
+        
+        # --- D. SALVATAGGIO ---
+        nuove_righe = []
+        testata = dati.get('testata', {})
+        for p in dati.get('prodotti', []):
+            nuove_righe.append([
+                testata.get('data', ''),
+                testata.get('insegna', ''),
+                testata.get('indirizzo', ''),
+                p.get('nome_pulito', ''),
+                p.get('prezzo_pieno', 0),
+                p.get('sconto_applicato', 0),
+                p.get('prezzo_netto', 0),
+                "SI" if p.get('is_offerta') else "NO"
+            ])
+        
+        worksheet.append_rows(nuove_righe)
+        print(f"✅ Fatto! Salvati {len(nuove_righe)} prodotti. Normalizzazione applicata basandosi su {len(prodotti_esistenti)} prodotti pre-esistenti.")
+        
+    except Exception as e:
+        print(f"❌ Errore: {e}")
+
+# Avvia
+analizza_con_normalizzazione()
