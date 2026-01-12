@@ -11,7 +11,7 @@ creds, _ = default()
 gc = gspread.authorize(creds)
 
 # 2. CONFIGURAZIONE AI
-API_KEY = "AIzaSyBIs5dhNAlEdbb7CQZ_MvXjct3ZWq-chDY"
+API_KEY = "XXXXXXXXXXXXXXXXXXXXXXXXXX" -----> DA INSERIRE API KEY 
 genai.configure(api_key=API_KEY)
 # Selezioniamo il modello (usando la logica di ricerca automatica)
 modelli = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
