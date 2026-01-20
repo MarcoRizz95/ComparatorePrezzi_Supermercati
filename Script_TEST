@@ -6,7 +6,7 @@ import gspread
 from google.auth import default
 
 # 1. NUOVA CHIAVE API E AUTENTICAZIONE
-API_KEY = "AIzaSyCyEQydwAAF3icsHhC7t3dBiL4v5HU1E6A"
+API_KEY = "------------------------"
 auth.authenticate_user()
 creds, _ = default()
 gc = gspread.authorize(creds)
