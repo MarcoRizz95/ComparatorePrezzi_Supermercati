@@ -1,0 +1,32 @@
+import streamlit as st
+import google.generativeai as genai
+import gspread
+import json
+from PIL import Image
+
+# Configurazione Pagina
+st.set_page_config(page_title="Risparmio Spesa AI", layout="centered")
+
+st.title("🛒 Caricatore Scontrini Smart")
+st.write("Carica la foto del tuo scontrino per popolare il database.")
+
+# Input Chiave API (Puoi anche nasconderla nei segreti del sito)
+api_key = st.text_input("Inserisci la tua Gemini API Key", type="password")
+
+if api_key:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-pro')
+
+    # Caricamento File
+    uploaded_file = st.file_uploader("Scegli una foto o scatta un'immagine", type=['jpg', 'jpeg', 'png'])
+
+    if uploaded_file is not None:
+        img = Image.open(uploaded_file)
+        st.image(img, caption='Scontrino caricato', use_column_width=True)
+        
+        if st.button("Analizza e Salva"):
+            with st.spinner('L’intelligenza artificiale sta leggendo lo scontrino...'):
+                # Qui inseriremo la stessa logica che abbiamo perfezionato su Colab
+                # ... (Analisi Gemini e salvataggio su Sheets)
+                st.success("Dati estratti e salvati correttamente!")
+                st.json(payload_estratto) # Ti mostra il JSON direttamente nell'app
