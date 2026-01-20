@@ -10,7 +10,7 @@ st.set_page_config(page_title="Scanner Scontrini AI 2026", layout="centered")
 
 try:
     # 1. Recupero API KEY di Gemini dai Secrets
-    API_KEY = st.secrets["AIzaSyCyEQydwAAF3icsHhC7t3dBiL4v5HU1E6A"]
+    API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
     
     # 2. Configurazione Google Sheets dal Service Account
