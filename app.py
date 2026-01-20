@@ -5,87 +5,66 @@ from google.oauth2.service_account import Credentials
 import json
 from PIL import Image
 
-# --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Scanner Scontrini AI", page_icon="🛒")
-st.title("🛒 Scanner Scontrini per Comparatore")
-st.write("Carica la foto e l'IA popolerà automaticamente il database su Google Sheets.")
+# --- CONFIGURAZIONE E CONNESSIONE ---
+st.set_page_config(page_title="AI Scanner Scontrini", layout="centered")
 
-# --- GESTIONE SEGRETI (API Key e Google Sheets) ---
-# In Streamlit Cloud, questi si inseriscono nelle impostazioni (Secrets)
-if "GEMINI_API_KEY" in st.secrets:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-else:
-    API_KEY = st.sidebar.text_input("Inserisci Gemini API Key", type="password")
-
-if API_KEY:
+# Recupero Credenziali dai Secrets di Streamlit
+try:
+    # Carichiamo la chiave API di Gemini
+    API_KEY = st.secrets["general"]["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
     
-    # 1. LOGICA AUTO-SELEZIONE MODELLO (Come su Colab)
-    try:
-        modelli_validi = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        modello_scelto = next((m for m in modelli_validi if 'flash' in m.lower()), modelli_validi[0])
-        model = genai.GenerativeModel(modello_scelto)
-        st.sidebar.success(f"Modello attivo: {modello_scelto}")
-    except Exception as e:
-        st.error(f"Errore nel rilevamento modelli: {e}")
+    # Carichiamo le credenziali di Google Sheets dal JSON salvato nei segreti
+    google_secrets = dict(st.secrets["google_sheets"])
+    creds = Credentials.from_service_account_info(google_secrets, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    gc = gspread.authorize(creds)
+    sh = gc.open("Database_Prezzi")
+    worksheet = sh.get_worksheet(0)
+    
+    # Rilevamento modello (come su Colab)
+    modelli_validi = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    modello_scelto = next((m for m in modelli_validi if 'flash' in m.lower()), modelli_validi[0])
+    model = genai.GenerativeModel(modello_scelto)
+except Exception as e:
+    st.error(f"Errore di configurazione: {e}")
+    st.stop()
 
-    # 2. MAPPA INSEGNE
-    INSEGNE_MAP = {
-        "04916380159": "ESSELUNGA",
-        "00796350239": "MARTINELLI",
-        "00212810235": "EUROSPAR",
-        "00150240230": "LIDL"
-    }
+# --- INTERFACCIA APP ---
+st.title("🛒 Scanner Scontrini Smart")
+st.write(f"Modello attivo: `{modello_scelto}`")
 
-    # 3. CARICAMENTO FILE
-    uploaded_file = st.file_uploader("Scatta o seleziona una foto dello scontrino", type=['jpg', 'jpeg', 'png'])
+uploaded_file = st.file_uploader("Carica o scatta una foto dello scontrino", type=['jpg', 'jpeg', 'png'])
 
-    if uploaded_file:
-        img = Image.open(uploaded_file)
-        st.image(img, caption="Scontrino pronto per l'analisi", use_container_width=True)
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    st.image(img, caption="Scontrino pronto", use_container_width=True)
 
-        if st.button("Analizza e Salva su Database"):
+    if st.button("Analizza e Salva nel Database"):
+        with st.spinner("L'IA sta leggendo..."):
             try:
-                with st.spinner("L'intelligenza artificiale sta leggendo lo scontrino..."):
-                    # RECUPERO GLOSSARIO (Per normalizzazione)
-                    # Nota: Qui serve la connessione a Sheets tramite Service Account
-                    # (Vedi sotto come configurare le credenziali)
-                    
-                    prompt = """
-                    Analizza questo scontrino riga per riga con precisione chirurgica.
-                    
-                    LOGICA:
-                    - Moltiplicazioni: Se vedi 'pz x' sopra un prodotto, estrai il prezzo unitario.
-                    - Sconti: Sottrai le righe con il segno meno al prodotto precedente.
-                    - P_IVA: Estrai la Partita IVA per identificare il negozio.
-                    - No Aggregazione: Ogni riga fisica deve essere un oggetto nel JSON.
+                # Prompt (Stessa logica V8.1 di Colab)
+                prompt = "Analizza lo scontrino. Estrai P_IVA, indirizzo, data. Per ogni prodotto: nome_letto, prezzo_unitario, quantita, is_offerta, proposta_normalizzazione. Restituisci SOLO JSON."
+                
+                response = model.generate_content([prompt, img])
+                dati = json.loads(response.text.strip().replace('```json', '').replace('```', ''))
+                
+                st.subheader("Payload JSON")
+                st.json(dati)
 
-                    RESTITUISCI SOLO JSON:
-                    {
-                      "testata": { "p_iva": "", "indirizzo": "", "data": "" },
-                      "prodotti": [
-                        { "nome_letto": "", "prezzo_unitario": 0.0, "quantita": 1, "is_offerta": "SI/NO", "proposta_normalizzazione": "", "da_normalizzare": "SI" }
-                      ]
-                    }
-                    """
-                    
-                    response = model.generate_content([prompt, img])
-                    raw_text = response.text.strip().replace('```json', '').replace('```', '')
-                    dati = json.loads(raw_text)
-
-                    # MOSTRA IL PAYLOAD JSON (Richiesta punto 3)
-                    st.subheader("Payload JSON Estratto")
-                    st.json(dati)
-
-                    # IDENTIFICAZIONE INSEGNA
-                    p_iva = dati['testata'].get('p_iva', '').replace(' ', '').replace('.', '')
-                    insegna = INSEGNE_MAP.get(p_iva, f"SCONOSCIUTO ({p_iva})")
-
-                    # SALVATAGGIO SU GOOGLE SHEETS
-                    # (Qui va inserita la logica gspread usando le credenziali dai segreti)
-                    st.success(f"Dati di {insegna} pronti per il database!")
-                    
+                # Scrittura su Sheets
+                nuove_righe = []
+                for p in dati['prodotti']:
+                    nuove_righe.append([
+                        dati['testata'].get('data', ''),
+                        "DA MAPPARE", # Qui potremmo aggiungere il dizionario P.IVA dopo
+                        dati['testata'].get('indirizzo', ''),
+                        p.get('nome_letto', '').upper(),
+                        p.get('prezzo_unitario', 0) * p.get('quantita', 1),
+                        0, p.get('prezzo_unitario', 0), p.get('is_offerta', 'NO'),
+                        p.get('quantita', 1), "SI", p.get('proposta_normalizzazione', '').upper()
+                    ])
+                
+                worksheet.append_rows(nuove_righe)
+                st.success(f"✅ Salvate {len(nuove_righe)} righe nel foglio Google!")
             except Exception as e:
                 st.error(f"Errore durante l'analisi: {e}")
-else:
-    st.warning("Inserisci la tua API Key per iniziare.")
