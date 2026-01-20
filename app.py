@@ -5,16 +5,15 @@ from google.oauth2.service_account import Credentials
 import json
 from PIL import Image
 
-# --- CONFIGURAZIONE E CONNESSIONE ---
-st.set_page_config(page_title="AI Scanner Scontrini", layout="centered")
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="Scanner Scontrini AI 2026", layout="centered")
 
-# Recupero Credenziali dai Secrets (STRUTTURA PIATTA)
 try:
-    # 1. Carichiamo la chiave API di Gemini
+    # 1. Recupero API KEY di Gemini dai Secrets
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
     
-    # 2. Ricostruiamo il dizionario per Google Sheets prendendo i campi uno ad uno
+    # 2. Configurazione Google Sheets dal Service Account
     google_info = {
         "type": st.secrets["type"],
         "project_id": st.secrets["project_id"],
@@ -28,19 +27,19 @@ try:
         "client_x509_cert_url": st.secrets["client_x509_cert_url"]
     }
     
-    creds = Credentials.from_service_account_info(google_info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(google_info, scopes=scopes)
     gc = gspread.authorize(creds)
     sh = gc.open("Database_Prezzi")
     worksheet = sh.get_worksheet(0)
     
-    # Rilevamento modello
-    modelli_validi = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    modello_scelto = next((m for m in modelli_validi if 'flash' in m.lower()), modelli_validi[0])
-    model = genai.GenerativeModel(modello_scelto)
+    # PUNZIAMO SUL MODELLO DI NUOVA GENERAZIONE 2.5 PRO
+    # (Se nel 2026 il nome è leggermente diverso, es. gemini-3-pro, cambialo qui)
+    MODEL_NAME = 'gemini-2.5-pro' 
+    model = genai.GenerativeModel(MODEL_NAME)
     
 except Exception as e:
-    st.error(f"Errore di configurazione: {e}")
-    st.info("Assicurati di aver inserito tutti i campi nei Secrets di Streamlit.")
+    st.error(f"Errore di configurazione iniziale: {e}")
     st.stop()
 
 # --- MAPPA INSEGNE ---
@@ -52,28 +51,40 @@ INSEGNE_MAP = {
 }
 
 # --- INTERFACCIA APP ---
-st.title("🛒 Scanner Scontrini Smart")
-st.write(f"Modello attivo: `{modello_scelto}`")
+st.title("🛒 Scanner Scontrini Pro")
+st.write(f"Motore di analisi: `{MODEL_NAME}`")
 
-uploaded_file = st.file_uploader("Carica o scatta una foto", type=['jpg', 'jpeg', 'png'])
+uploaded_file = st.file_uploader("Carica o scatta una foto dello scontrino", type=['jpg', 'jpeg', 'png'])
 
 if uploaded_file:
     img = Image.open(uploaded_file)
-    st.image(img, caption="Scontrino pronto", use_container_width=True)
+    st.image(img, caption="Scontrino caricato", use_container_width=True)
 
     if st.button("Analizza e Salva"):
-        with st.spinner("L'IA sta leggendo lo scontrino..."):
+        with st.spinner(f"L'IA {MODEL_NAME} sta analizzando i dati..."):
             try:
-                prompt = "Analizza lo scontrino. Estrai P_IVA, indirizzo, data. Per ogni prodotto: nome_letto, prezzo_unitario, quantita, is_offerta, proposta_normalizzazione. Restituisci SOLO JSON."
-                response = model.generate_content([prompt, img])
-                dati = json.loads(response.text.strip().replace('```json', '').replace('```', ''))
+                prompt = """
+                Analizza questo scontrino. 
+                - Sconti: sottrai il valore negativo al prodotto precedente.
+                - Moltiplicazioni: se vedi 'pz x' sopra un nome prodotto, usa quel prezzo come unitario.
+                - P_IVA: estrai la Partita IVA.
+                - Restituisci JSON con prodotti (nome_letto, prezzo_unitario, quantita, is_offerta, proposta_normalizzazione).
+                """
                 
-                st.subheader("Payload JSON")
+                response = model.generate_content([prompt, img])
+                
+                # Pulizia della risposta JSON
+                clean_json = response.text.strip().replace('```json', '').replace('```', '')
+                dati = json.loads(clean_json)
+                
+                st.subheader("Dati Estratti (JSON)")
                 st.json(dati)
 
+                # Identificazione Supermercato
                 p_iva = dati['testata'].get('p_iva', '').replace(' ', '').replace('.', '')
                 insegna = INSEGNE_MAP.get(p_iva, f"SCONOSCIUTO ({p_iva})")
 
+                # Preparazione righe per lo Sheet
                 nuove_righe = []
                 for p in dati['prodotti']:
                     nuove_righe.append([
@@ -82,11 +93,17 @@ if uploaded_file:
                         dati['testata'].get('indirizzo', ''),
                         p.get('nome_letto', '').upper(),
                         p.get('prezzo_unitario', 0) * p.get('quantita', 1),
-                        0, p.get('prezzo_unitario', 0), p.get('is_offerta', 'NO'),
-                        p.get('quantita', 1), "SI", p.get('proposta_normalizzazione', '').upper()
+                        0, # Sconto (già calcolato nel netto)
+                        p.get('prezzo_unitario', 0),
+                        p.get('is_offerta', 'NO'),
+                        p.get('quantita', 1),
+                        "SI", # Da Normalizzare
+                        p.get('proposta_normalizzazione', '').upper()
                     ])
                 
                 worksheet.append_rows(nuove_righe)
-                st.success(f"✅ Salvate {len(nuove_righe)} righe di {insegna} nel database!")
+                st.success(f"✅ Ottimo! {len(nuove_righe)} articoli salvati correttamente.")
+                
             except Exception as e:
-                st.error(f"Errore analisi: {e}")
+                st.error(f"Errore durante l'analisi o il salvataggio: {e}")
+                st.info("Potrebbe essere un problema di quota giornaliera o di lettura del formato scontrino.")
