@@ -47,11 +47,14 @@ INSEGNE_MAP = {
     "04916380159": "ESSELUNGA",
     "00796350239": "MARTINELLI",
     "00212810235": "EUROSPAR",
-    "00150240230": "LIDL"
+    "00150240230": "LIDL",
+    "00858310238": "MIGROSS",
+    "00542090238": "IPERFAMILA",
+    "01274580248": "FAMILA"
 }
 
 # --- INTERFACCIA APP ---
-st.title("🛒 Scanner Scontrini Pro")
+st.title("🛒 Scanner Scontrini")
 st.write(f"Motore di analisi: `{MODEL_NAME}`")
 
 uploaded_file = st.file_uploader("Carica o scatta una foto dello scontrino", type=['jpg', 'jpeg', 'png'])
