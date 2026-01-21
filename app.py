@@ -64,49 +64,59 @@ if uploaded_file:
     st.image(img, caption="Scontrino caricato", use_container_width=True)
 
     if st.button("Analizza e Salva"):
-        with st.spinner(f"L'IA {MODEL_NAME} sta analizzando i dati..."):
+        with st.spinner("Analisi in corso..."):
             try:
+                # Prompt potenziato per Migross ed Esselunga
                 prompt = """
                 Analizza questo scontrino. 
-                - Sconti: sottrai il valore negativo al prodotto precedente.
-                - Moltiplicazioni: se vedi 'pz x' sopra un nome prodotto, usa quel prezzo come unitario.
-                - P_IVA: estrai la Partita IVA.
-                - Restituisci JSON con prodotti (nome_letto, prezzo_unitario, quantita, is_offerta, proposta_normalizzazione).
+                DATI TESTATA (Cerca in alto e in basso): p_iva, indirizzo, data.
+                DATI PRODOTTI: 
+                - Identifica ogni articolo. 
+                - Se la riga successiva contiene '-SCONTO' o un valore negativo, sottrailo al prodotto precedente.
+                - Restituisci JSON con chiavi 'testata' e 'prodotti'.
+                - In 'prodotti' inserisci: nome_letto, prezzo_unitario, quantita, is_offerta, proposta_normalizzazione.
                 """
                 
                 response = model.generate_content([prompt, img])
+                raw_text = response.text.strip().replace('```json', '').replace('```', '')
+                dati = json.loads(raw_text)
                 
-                # Pulizia della risposta JSON
-                clean_json = response.text.strip().replace('```json', '').replace('```', '')
-                dati = json.loads(clean_json)
-                
-                st.subheader("Dati Estratti (JSON)")
+                st.subheader("Payload JSON")
                 st.json(dati)
 
-                # Identificazione Supermercato
-                p_iva = dati['testata'].get('p_iva', '').replace(' ', '').replace('.', '')
-                insegna = INSEGNE_MAP.get(p_iva, f"SCONOSCIUTO ({p_iva})")
+                # Gestione robusta
+                testata = dati.get('testata', {})
+                prodotti = dati.get('prodotti', [])
+                if isinstance(dati, list): prodotti = dati
 
-                # Preparazione righe per lo Sheet
+                # Recupero Insegna tramite P.IVA
+                p_iva_raw = str(testata.get('p_iva', '')).replace(' ', '').replace('.', '')
+                insegna = INSEGNE_MAP.get(p_iva_raw, f"SCONOSCIUTO ({p_iva_raw})")
+                
                 nuove_righe = []
-                for p in dati['prodotti']:
+                for p in prodotti:
+                    p_unitario = float(p.get('prezzo_unitario', 0))
+                    qt = float(p.get('quantita', 1))
+                    
                     nuove_righe.append([
-                        dati['testata'].get('data', ''),
+                        testata.get('data', 'DATA MANCANTE'),
                         insegna,
-                        dati['testata'].get('indirizzo', ''),
-                        p.get('nome_letto', '').upper(),
-                        p.get('prezzo_unitario', 0) * p.get('quantita', 1),
-                        0, # Sconto (già calcolato nel netto)
-                        p.get('prezzo_unitario', 0),
+                        testata.get('indirizzo', 'INDIRIZZO MANCANTE'),
+                        str(p.get('nome_letto', '')).upper(),
+                        p_unitario * qt,
+                        0, # Sconto (già calcolato nell'unitario dall'IA)
+                        p_unitario,
                         p.get('is_offerta', 'NO'),
-                        p.get('quantita', 1),
-                        "SI", # Da Normalizzare
-                        p.get('proposta_normalizzazione', '').upper()
+                        qt,
+                        "SI",
+                        str(p.get('proposta_normalizzazione', '')).upper()
                     ])
                 
-                worksheet.append_rows(nuove_righe)
-                st.success(f"✅ Ottimo! {len(nuove_righe)} articoli salvati correttamente.")
-                
+                if nuove_righe:
+                    worksheet.append_rows(nuove_righe)
+                    st.success(f"✅ Ottimo! Salvati {len(nuove_righe)} articoli di {insegna}!")
+                else:
+                    st.warning("Nessun prodotto trovato.")
+
             except Exception as e:
-                st.error(f"Errore durante l'analisi o il salvataggio: {e}")
-                st.info("Potrebbe essere un problema di quota giornaliera o di lettura del formato scontrino.")
+                st.error(f"Errore durante l'analisi o salvataggio: {e}")
