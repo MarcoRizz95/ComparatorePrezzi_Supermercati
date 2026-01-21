@@ -35,7 +35,7 @@ try:
     
     # PUNZIAMO SUL MODELLO DI NUOVA GENERAZIONE 2.5 PRO
     # (Se nel 2026 il nome è leggermente diverso, es. gemini-3-pro, cambialo qui)
-    MODEL_NAME = 'gemini-2.5-pro' 
+    MODEL_NAME = 'gemini-2.5-flash' 
     model = genai.GenerativeModel(MODEL_NAME)
     
 except Exception as e:
