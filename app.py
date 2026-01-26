@@ -10,12 +10,11 @@ import re
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="Spesa Smart AI", layout="centered", page_icon="🛒")
 
-# CSS per rifinitura estetica
 st.markdown("""
     <style>
     .header-box { padding: 20px; border-radius: 15px; border: 2px solid #e0e0e0; margin-bottom: 20px; background-color: white; }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 10px 10px 0 0; padding: 10px 20px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; background-color: #f0f2f6; border-radius: 10px 10px 0 0; }
     .stTabs [aria-selected="true"] { background-color: #007bff; color: white !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -77,25 +76,13 @@ with tab_carica:
     if st.session_state.dati_analizzati:
         d = st.session_state.dati_analizzati
         testata = d.get('testata', {})
-        
-        # 1. VALIDAZIONE CONTABILE (Punto 2 richiesto)
         prodotti_raw = d.get('prodotti', [])
-        totale_calcolato = sum([clean_price(p.get('prezzo_unitario', 0)) * float(p.get('quantita', 1)) for p in prodotti_raw])
-        totale_letto = clean_price(testata.get('totale_scontrino_letto', 0))
-        
-        st.subheader("📝 Revisione Dati")
-        col_t1, col_t2, col_t3 = st.columns(3)
-        with col_t1:
-            st.metric("Totale Scontrino", f"€{totale_letto:.2f}")
-        with col_t2:
-            st.metric("Totale Calcolato", f"€{totale_calcolato:.2f}", delta=round(totale_calcolato - totale_letto, 2), delta_color="inverse")
-        with col_t3:
-            if abs(totale_calcolato - totale_letto) < 0.05:
-                st.success("✅ Totale OK")
-            else:
-                st.warning("⚠️ Controlla prezzi")
 
-        # Sezione Negozio
+        # 1. VALIDAZIONE SEMPLIFICATA (Solo totale calcolato)
+        tot_calcolato = sum([clean_price(p.get('prezzo_unitario', 0)) * float(p.get('quantita', 1)) for p in prodotti_raw])
+        st.info(f"💰 **Somma totale articoli rilevati: €{tot_calcolato:.2f}**")
+
+        st.subheader("📝 Revisione Dati")
         piva_letta = clean_piva(testata.get('p_iva', ''))
         match_negozio = next((n for n in lista_negozi if clean_piva(n.get('P_IVA', '')) == piva_letta), None) if piva_letta else None
         
@@ -110,14 +97,14 @@ with tab_carica:
             data_f = st.text_input("Data (DD/MM/YYYY)", value="/".join(data_iso.split("-")[::-1]))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Tabella Prodotti
-        lista_pulita = [{"Prodotto": str(p.get('nome_letto', '')).upper(), "Prezzo Un.": clean_price(p.get('prezzo_unitario', 0)), "Qtà": float(p.get('quantita', 1)), "Offerta": str(p.get('is_offerta', 'NO')).upper(), "Normalizzato": str(p.get('nome_standard', '')).upper()} for p in prodotti_raw]
-        df_edit = pd.DataFrame(lista_pulita)
+        # Tabella Editor
+        lista_edit = [{"Prodotto": str(p.get('nome_letto', '')).upper(), "Prezzo Un.": clean_price(p.get('prezzo_unitario', 0)), "Qtà": float(p.get('quantita', 1)), "Offerta": str(p.get('is_offerta', 'NO')).upper(), "Nome Standard": str(p.get('nome_standard', '')).upper()} for p in prodotti_raw]
+        df_edit = pd.DataFrame(lista_edit)
         edited_df = st.data_editor(df_edit, use_container_width=True, num_rows="dynamic", hide_index=True)
 
         if st.button("💾 SALVA NEL DATABASE"):
             try:
-                final_rows = [[data_f, insegna_f, indirizzo_f, str(row['Prodotto']).upper(), clean_price(row['Prezzo Un.']) * float(row['Qtà']), 0, clean_price(row['Prezzo Un.']), str(row['Offerta']).upper(), row['Qtà'], "SI", str(row['Normalizzato']).upper()] for _, row in edited_df.iterrows()]
+                final_rows = [[data_f, insegna_f, indirizzo_f, str(row['Prodotto']).upper(), clean_price(row['Prezzo Un.']) * float(row['Qtà']), 0, clean_price(row['Prezzo Un.']), str(row['Offerta']).upper(), row['Qtà'], "SI", str(row['Nome Standard']).upper()] for _, row in edited_df.iterrows()]
                 worksheet.append_rows(final_rows)
                 st.success("✅ Salvataggio completato!")
                 st.session_state.dati_analizzati = None
@@ -125,32 +112,35 @@ with tab_carica:
             except Exception as e:
                 st.error(f"Errore: {e}")
 
-# --- TAB 2: RICERCA (Punto 1 richiesto) ---
+# --- TAB 2: RICERCA ---
 with tab_cerca:
-    st.subheader("🔍 Confronta Prezzi nel Database")
-    query = st.text_input("Cerca un prodotto (es: Pomodoro, Pasta...)", "").upper()
+    st.subheader("🔍 Ricerca Prezzi")
+    query = st.text_input("Scrivi il prodotto da cercare", "").upper()
     
     if query:
-        # Carichiamo tutti i dati per la ricerca
-        with st.spinner("Ricerca in corso..."):
+        with st.spinner("Sto consultando il database..."):
             all_data = worksheet.get_all_records()
-            df_all = pd.DataFrame(all_data)
-            
-            # Filtro per nome prodotto (cerca sia nel nome letto che nel normalizzato)
-            mask = df_all['Prodotto'].str.contains(query, na=False) | df_all['Nome Standard Proposto'].str.contains(query, na=False)
-            risultati = df_all[mask].copy()
-            
-            if not risultati.empty:
-                # Pulizia e ordinamento
-                risultati['Prezzo_Netto'] = risultati['Prezzo_Netto'].apply(clean_price)
-                risultati = risultati.sort_values(by='Prezzo_Netto', ascending=True)
+            if all_data:
+                df_all = pd.DataFrame(all_data)
                 
-                # Visualizzazione "Miglior Prezzo"
-                best = risultati.iloc[0]
-                st.success(f"🏆 Miglior prezzo trovato: **€{best['Prezzo_Netto']:.2f}** presso **{best['Supermercato']}** ({best['Data']})")
+                # Identificazione dinamica delle colonne per evitare KeyError
+                col_prod = 'Prodotto' if 'Prodotto' in df_all.columns else df_all.columns[3]
+                col_std = 'Nome Standard Proposto' if 'Nome Standard Proposto' in df_all.columns else df_all.columns[-1]
+                col_prezzo = 'Prezzo_Netto' if 'Prezzo_Netto' in df_all.columns else df_all.columns[6]
+
+                # Filtro di ricerca
+                mask = df_all[col_prod].astype(str).str.contains(query, na=False) | df_all[col_std].astype(str).str.contains(query, na=False)
+                risultati = df_all[mask].copy()
                 
-                # Tabella completa
-                st.write("### Tutti i risultati:")
-                st.dataframe(risultati[['Prezzo_Netto', 'Supermercato', 'Indirizzo', 'Prodotto', 'Data', 'In Offerta']], use_container_width=True, hide_index=True)
+                if not risultati.empty:
+                    risultati[col_prezzo] = risultati[col_prezzo].apply(clean_price)
+                    risultati = risultati.sort_values(by=col_prezzo, ascending=True)
+                    
+                    best = risultati.iloc[0]
+                    st.success(f"🏆 **{best['Supermercato']}** è il più economico per **{query}**: **€{best[col_prezzo]:.2f}**")
+                    
+                    st.dataframe(risultati[[col_prezzo, 'Supermercato', 'Indirizzo', col_prod, 'Data']], use_container_width=True, hide_index=True)
+                else:
+                    st.warning("Nessun risultato trovato per questa parola.")
             else:
-                st.info("Nessun prodotto trovato con questo nome.")
+                st.info("Il database è vuoto.")
