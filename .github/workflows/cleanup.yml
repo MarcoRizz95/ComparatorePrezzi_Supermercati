@@ -1,0 +1,28 @@
+name: Database Daily Cleanup
+
+on:
+  schedule:
+    # Esegue alle 01:00 UTC (che è mezzanotte o le 2 in Italia a seconda dell'ora legale)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Permette anche di lanciarlo a mano per test
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install gspread pandas google-auth
+
+      - name: Run cleanup script
+        env:
+          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
+        run: python clean_db.py
