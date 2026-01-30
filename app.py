@@ -7,21 +7,8 @@ from PIL import Image, ImageOps
 import pandas as pd
 import re
 
-# --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Scanner Spesa Master", layout="centered", page_icon="🛒")
+# --- 1. FUNZIONI DI SERVIZIO (Definite subito per evitare NameError) ---
 
-# CSS Estetico
-st.markdown("""
-    <style>
-    .header-box { padding: 20px; border-radius: 15px; border: 2px solid #e0e0e0; margin-bottom: 20px; background-color: white; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; background-color: #f0f2f6; border-radius: 10px 10px 0 0; }
-    .stTabs [aria-selected="true"] { background-color: #007bff; color: white !important; }
-    .winner-box { background-color: #d4edda; padding: 15px; border-radius: 10px; border-left: 5px solid #28a745; margin-bottom: 20px; color: #155724; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- FUNZIONI DI SERVIZIO ---
 def clean_piva(piva):
     solo_numeri = re.sub(r'\D', '', str(piva))
     return solo_numeri.zfill(11) if solo_numeri else ""
@@ -32,7 +19,43 @@ def clean_price(price_str):
     try: return float(cleaned)
     except: return 0.0
 
-# --- CONNESSIONI ---
+def get_col_name(df, keyword):
+    """Cerca il nome della colonna che contiene una determinata parola"""
+    for c in df.columns:
+        if keyword.upper() in str(c).upper().strip():
+            return c
+    return None
+
+# --- 2. CONFIGURAZIONE PAGINA E CSS ---
+st.set_page_config(page_title="Scanner Spesa V21", layout="centered", page_icon="🛒")
+
+# CSS per Tab Leggibili e Layout
+st.markdown("""
+    <style>
+    /* Sfondo generale e box */
+    .stApp { background-color: #f8f9fa; }
+    .header-box { padding: 20px; border-radius: 15px; border: 2px solid #d1d3d4; margin-bottom: 20px; background-color: #ffffff; color: #000000; }
+    
+    /* FIX COLORI TAB: Forza visibilità testo */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #e0e0e0 !important;
+        color: #333333 !important;
+        border-radius: 10px 10px 0 0;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #004a99 !important;
+        color: #ffffff !important;
+    }
+    
+    /* Box Vincitore Ricerca */
+    .winner-box { background-color: #d4edda; padding: 15px; border-radius: 10px; border-left: 5px solid #28a745; margin-bottom: 20px; color: #155724; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 3. CONNESSIONE AI E DATABASE ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
@@ -49,28 +72,27 @@ except Exception as e:
     st.error(f"Errore connessione: {e}")
     st.stop()
 
-# --- INTERFACCIA A TAB ---
+# --- 4. LOGICA APP (TABS) ---
+
 tab_carica, tab_cerca = st.tabs(["📷 CARICA SCONTRINO", "🔍 CERCA PREZZI"])
 
-# --- TAB 1: CARICAMENTO (Con supporto Multi-Foto) ---
 with tab_carica:
     if 'dati_analizzati' not in st.session_state:
         st.session_state.dati_analizzati = None
 
-    uploaded_files = st.file_uploader("Carica una o più foto (per scontrini lunghi)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+    files = st.file_uploader("Carica foto scontrino (anche multiple)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
-    if uploaded_files:
-        imgs = [ImageOps.exif_transpose(Image.open(f)) for f in uploaded_files]
-        st.image(imgs, width=150) # Anteprime piccole
+    if files:
+        imgs = [ImageOps.exif_transpose(Image.open(f)) for f in files]
+        st.image(imgs, width=120)
         
         if st.button("🚀 ANALIZZA SCONTRINO"):
-            with st.spinner("L'IA sta elaborando i pezzi dello scontrino..."):
+            with st.spinner("L'IA sta elaborando le foto..."):
                 try:
-                    # Recupero glossario dinamico per normalizzazione
-                    all_db = worksheet.get_all_records()
-                    glossario = list(set([str(r.get('Proposta_Normalizzazione', r.get('Nome Standard Proposto', ''))).upper() for r in all_db if r]))
+                    all_db_data = worksheet.get_all_records()
+                    glossario = list(set([str(r.get('Nome Standard Proposto', r.get('Proposta_Normalizzazione', ''))).upper() for r in all_db_data if r]))
                     
-                    # PROMPT ORIGINALE INTEGRATO CON ISTRUZIONE MULTI-FOTO
+                    # PROMPT ORIGINALE INTEGRATO PER MULTI-FOTO
                     prompt = f"""
                     ATTENZIONE: Se caricate più immagini, sono parti dello STESSO scontrino. Analizzale insieme come un unico documento.
 
@@ -88,18 +110,17 @@ with tab_carica:
                     4. ESTREMA PRECISIONE: Non inventare prodotti e non "raggrupparli". Se ci sono due righe uguali, non salvarne una unica con prezzo e quantità doppie.
                        Ogni riga fisica deve essere letta.
 
-                    JSON richiesto:
+                    JSON:
                     {{
                       "testata": {{ "p_iva": "", "indirizzo_letto": "", "data_iso": "YYYY-MM-DD", "totale_scontrino_letto": 0.0 }},
                       "prodotti": [ {{ "nome_letto": "", "prezzo_unitario": 0.0, "quantita": 1, "is_offerta": "SI/NO", "nome_standard": "" }} ]
                     }}
                     """
-                    
                     response = model.generate_content([prompt, *imgs])
                     st.session_state.dati_analizzati = json.loads(response.text.strip().replace('```json', '').replace('```', ''))
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore analisi: {e}")
+                    st.error(f"Errore: {e}")
 
     if st.session_state.dati_analizzati:
         d = st.session_state.dati_analizzati
@@ -116,41 +137,38 @@ with tab_carica:
         c1, c2, c3 = st.columns(3)
         with c1: insegna_f = st.text_input("Supermercato", value=(match['Insegna_Standard'] if match else f"NUOVO ({piva_l})")).upper()
         with c2: indirizzo_f = st.text_input("Indirizzo", value=(match['Indirizzo_Standard (Pulito)'] if match else testata.get('indirizzo_letto', ''))).upper()
-        with c3: 
-            d_iso = testata.get('data_iso', '2026-01-01')
-            data_f = st.text_input("Data", value="/".join(d_iso.split("-")[::-1]))
+        with c3: data_f = st.text_input("Data", value="/".join(testata.get('data_iso', '2026-01-01').split("-")[::-1]))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        lista_edit = [{"Prodotto": str(p.get('nome_letto', '')).upper(), "Prezzo Un.": clean_price(p.get('prezzo_unitario', 0)), "Qtà": float(p.get('quantita', 1)), "Offerta": str(p.get('is_offerta', 'NO')).upper(), "Normalizzato": str(p.get('nome_standard', p.get('nome_letto', ''))).upper()} for p in prodotti_raw]
+        lista_edit = [{"Prodotto": str(p.get('nome_letto', '')).upper(), "Prezzo Un.": clean_price(p.get('prezzo_unitario', 0)), "Qtà": float(p.get('quantita', 1)), "Offerta": str(p.get('is_offerta', 'NO')).upper(), "Nome Standard": str(p.get('nome_standard', p.get('nome_letto', ''))).upper()} for p in prodotti_raw]
         edited_df = st.data_editor(pd.DataFrame(lista_edit), use_container_width=True, num_rows="dynamic", hide_index=True)
 
         if st.button("💾 SALVA NEL DATABASE"):
-            final_rows = [[data_f, insegna_f, indirizzo_f, str(r['Prodotto']).upper(), clean_price(r['Prezzo Un.']) * float(r['Qtà']), 0, clean_price(r['Prezzo Un.']), r['Offerta'], r['Qtà'], "SI", str(r['Normalizzato']).upper()] for _, r in edited_df.iterrows()]
+            final_rows = [[data_f, insegna_f, indirizzo_f, str(r['Prodotto']).upper(), clean_price(r['Prezzo Un.']) * float(r['Qtà']), 0, clean_price(r['Prezzo Un.']), r['Offerta'], r['Qtà'], "SI", str(r['Nome Standard']).upper()] for _, r in edited_df.iterrows()]
             worksheet.append_rows(final_rows)
-            st.success("✅ Salvataggio completato!"); st.session_state.dati_analizzati = None; st.rerun()
+            st.success("✅ Dati salvati!"); st.session_state.dati_analizzati = None; st.rerun()
 
-# --- TAB 2: RICERCA ---
 with tab_cerca:
     st.subheader("🔍 Ricerca Prezzi")
-    query = st.text_input("Inserisci il prodotto da cercare", "").upper().strip()
+    query = st.text_input("Cerca un prodotto nel database", "").upper().strip()
     
     if query:
         with st.spinner("Consultazione database..."):
             all_data = worksheet.get_all_records()
             if all_data:
                 df_all = pd.DataFrame(all_data)
+                df_all.columns = [str(c).strip() for c in df_all.columns]
                 
-                # Identificazione dinamica delle colonne (Anti-KeyError)
-                c_prod = get_col_name(df_all, 'Prodotto')
-                c_norm = get_col_name(df_all, 'Normalizzazione')
-                c_prezzo = get_col_name(df_all, 'Netto') or get_col_name(df_all, 'Unitario')
-                c_data = get_col_name(df_all, 'Data')
-                c_super = get_col_name(df_all, 'Supermercato')
-                c_indirizzo = get_col_name(df_all, 'Indirizzo')
-                c_off = get_col_name(df_all, 'Offerta')
+                # Cerchiamo le colonne in modo flessibile
+                c_prod = get_col_name(df_all, 'PRODOTTO')
+                c_norm = get_col_name(df_all, 'NORMALIZZAZIONE')
+                c_prezzo = get_col_name(df_all, 'NETTO') or get_col_name(df_all, 'UNITARIO')
+                c_data = get_col_name(df_all, 'DATA')
+                c_super = get_col_name(df_all, 'SUPERMERCATO')
+                c_indirizzo = get_col_name(df_all, 'INDIRIZZO')
+                c_off = get_col_name(df_all, 'OFFERTA')
 
                 if c_prod and c_prezzo:
-                    # Filtro
                     mask = df_all[c_prod].astype(str).str.contains(query, na=False)
                     if c_norm: mask |= df_all[c_norm].astype(str).str.contains(query, na=False)
                     
@@ -158,15 +176,14 @@ with tab_cerca:
                     if not res.empty:
                         res[c_prezzo] = res[c_prezzo].apply(clean_price)
                         res['dt'] = pd.to_datetime(res[c_data], format='%d/%m/%Y', errors='coerce')
-                        # Logica ultimo prezzo per sede
                         res = res.sort_values(by='dt', ascending=False).drop_duplicates(subset=[c_super, c_indirizzo])
                         res = res.sort_values(by=c_prezzo)
                         
                         best = res.iloc[0]
-                        st.markdown(f'<div class="winner-box">🏆 <b>{best[c_super]}</b> è il più conveniente: <b>€{best[c_prezzo]:.2f}</b> ({best[c_data]})</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="winner-box">🏆 <b>{best[c_super]}</b> è il più economico per "{query}": <b>€{best[c_prezzo]:.2f}</b> ({best[c_data]})</div>', unsafe_allow_html=True)
                         
                         disp = res[[c_prezzo, c_super, c_indirizzo, c_data, c_off, c_prod]]
-                        disp.columns = ['Prezzo €', 'Negozio', 'Indirizzo', 'Data', 'Offerta', 'Nome Scontrino']
+                        disp.columns = ['Prezzo €', 'Supermercato', 'Indirizzo', 'Data', 'Offerta', 'Nome Scontrino']
                         st.dataframe(disp, use_container_width=True, hide_index=True)
                     else: st.warning("Nessun prodotto trovato.")
-                else: st.error("Errore: lo Sheet non ha le colonne 'Prodotto' o 'Prezzo_Netto'.")
+                else: st.error("Errore: colonne del database non riconosciute.")
