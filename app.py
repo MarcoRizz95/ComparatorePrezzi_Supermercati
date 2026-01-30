@@ -129,34 +129,44 @@ with tab_carica:
             worksheet.append_rows(final_rows)
             st.success("✅ Salvataggio completato!"); st.session_state.dati_analizzati = None; st.rerun()
 
-# --- TAB 2: RICERCA (Robust Search Anti-KeyError) ---
+# --- TAB 2: RICERCA ---
 with tab_cerca:
     st.subheader("🔍 Ricerca Prezzi")
-    query = st.text_input("Scrivi il prodotto da cercare", "").upper().strip()
+    query = st.text_input("Inserisci il prodotto da cercare", "").upper().strip()
     
     if query:
         with st.spinner("Consultazione database..."):
             all_data = worksheet.get_all_records()
             if all_data:
                 df_all = pd.DataFrame(all_data)
-                df_all.columns = [str(c).strip() for c in df_all.columns]
                 
-                # Identificazione dinamica delle colonne richieste
-                col_prod = next((c for c in df_all.columns if 'PRODOTTO' in c.upper()), None)
-                col_norm = next((c for c in df_all.columns if 'NORMALIZZAZIONE' in c.upper()), None)
-                
-                if col_prod and col_norm:
-                    mask = df_all[col_prod].astype(str).str.contains(query, na=False) | df_all[col_norm].astype(str).str.contains(query, na=False)
-                    res = df_all[mask].copy()
+                # Identificazione dinamica delle colonne (Anti-KeyError)
+                c_prod = get_col_name(df_all, 'Prodotto')
+                c_norm = get_col_name(df_all, 'Normalizzazione')
+                c_prezzo = get_col_name(df_all, 'Netto') or get_col_name(df_all, 'Unitario')
+                c_data = get_col_name(df_all, 'Data')
+                c_super = get_col_name(df_all, 'Supermercato')
+                c_indirizzo = get_col_name(df_all, 'Indirizzo')
+                c_off = get_col_name(df_all, 'Offerta')
+
+                if c_prod and c_prezzo:
+                    # Filtro
+                    mask = df_all[c_prod].astype(str).str.contains(query, na=False)
+                    if c_norm: mask |= df_all[c_norm].astype(str).str.contains(query, na=False)
                     
+                    res = df_all[mask].copy()
                     if not res.empty:
-                        res['Prezzo_Netto'] = res['Prezzo_Netto'].apply(clean_price)
-                        res['dt'] = pd.to_datetime(res['Data'], format='%d/%m/%Y', errors='coerce')
-                        res = res.sort_values(by='dt', ascending=False).drop_duplicates(subset=['Supermercato', 'Indirizzo'])
-                        res = res.sort_values(by='Prezzo_Netto')
+                        res[c_prezzo] = res[c_prezzo].apply(clean_price)
+                        res['dt'] = pd.to_datetime(res[c_data], format='%d/%m/%Y', errors='coerce')
+                        # Logica ultimo prezzo per sede
+                        res = res.sort_values(by='dt', ascending=False).drop_duplicates(subset=[c_super, c_indirizzo])
+                        res = res.sort_values(by=c_prezzo)
                         
                         best = res.iloc[0]
-                        st.markdown(f'<div class="winner-box">🏆 <b>{best["Supermercato"]}</b> è il più economico: <b>€{best["Prezzo_Netto"]:.2f}</b></div>', unsafe_allow_html=True)
-                        st.dataframe(res[['Prezzo_Netto', 'Supermercato', 'Indirizzo', 'Data', 'Offerta', col_prod]], use_container_width=True, hide_index=True)
-                    else: st.warning("Nessun risultato.")
-                else: st.error("Colonne database non trovate.")
+                        st.markdown(f'<div class="winner-box">🏆 <b>{best[c_super]}</b> è il più conveniente: <b>€{best[c_prezzo]:.2f}</b> ({best[c_data]})</div>', unsafe_allow_html=True)
+                        
+                        disp = res[[c_prezzo, c_super, c_indirizzo, c_data, c_off, c_prod]]
+                        disp.columns = ['Prezzo €', 'Negozio', 'Indirizzo', 'Data', 'Offerta', 'Nome Scontrino']
+                        st.dataframe(disp, use_container_width=True, hide_index=True)
+                    else: st.warning("Nessun prodotto trovato.")
+                else: st.error("Errore: lo Sheet non ha le colonne 'Prodotto' o 'Prezzo_Netto'.")
