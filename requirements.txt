@@ -2,6 +2,3 @@ google-generativeai
 gspread
 google-auth
 Pillow
-geopy
-streamlit-js-eval
-request
