@@ -235,22 +235,28 @@ with tab_carica:
                         # Ordine col Catalogo: ID, NOME, BRAND, CAT, FORMATO, UNITA
                         rows_catalogo_new.append([prod_id, norm_name, brand, cat, fmt, unit])
                     
-                    # Prepara riga Scontrino
-                    # Ordine: Data, Negozio, Indirizzo, Descrizione_Grezza, Prezzo_Pagato, Prezzo_Unitario, Quantita, In_Offerta, ID_PRODOTTO
+# Prepara riga Scontrino
+                    # Dobbiamo rispettare la struttura del TUO vecchio foglio per non sballare le colonne:
+                    # 1. Data, 2. Negozio, 3. Indirizzo, 4. Prodotto, 5. Totale, 
+                    # 6. Sconto(0), 7. Unitario, 8. Offerta, 9. Qtà, 10. Check("SI"), 11. ID_PRODOTTO
+                    
                     prz_unit = clean_price(row["Prezzo €"])
                     qta = float(row["Qtà"])
+                    
                     rows_scontrini.append([
-                        data_f, 
-                        insegna_f, 
-                        indirizzo_f, 
-                        str(row["Scontrino"]).upper(), 
-                        prz_unit * qta, 
-                        prz_unit, 
-                        qta, 
-                        str(row["Offerta"]).upper(), 
-                        prod_id
+                        data_f,                         # Colonna A: Data
+                        insegna_f,                      # Colonna B: Negozio
+                        indirizzo_f,                    # Colonna C: Indirizzo
+                        str(row["Scontrino"]).upper(),  # Colonna D: Descrizione Grezza
+                        prz_unit * qta,                 # Colonna E: Totale Riga
+                        0,                              # Colonna F: (Ex Sconto/Extra) -> Manteniamo 0 per allineamento
+                        prz_unit,                       # Colonna G: Prezzo Unitario
+                        str(row["Offerta"]).upper(),    # Colonna H: In Offerta
+                        qta,                            # Colonna I: Quantità
+                        "SI",                           # Colonna J: (Ex colonna di controllo) -> Manteniamo "SI"
+                        prod_id                         # Colonna K: QUI SALVIAMO L'ID (Ex Nome Normalizzato)
                     ])
-
+                    
                 # Scrittura Batch
                 if rows_catalogo_new:
                     ws_catalogo.append_rows(rows_catalogo_new)
