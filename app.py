@@ -195,77 +195,140 @@ with tab_carica:
         
         edited_df = st.data_editor(df_editor, use_container_width=True, num_rows="dynamic", hide_index=True)
 
-        if st.button("💾 SALVA NEL DATABASE RELAZIONALE"):
-            with st.spinner("Salvataggio e aggiornamento catalogo..."):
-                # 1. Recupera Catalogo Attuale
-                cat_records = ws_catalogo.get_all_records()
-                df_cat = pd.DataFrame(cat_records)
+       if st.button("💾 SALVA NEL DATABASE RELAZIONALE"):
+            with st.spinner("Salvataggio e pulizia dati in corso..."):
+                import math 
+                import time
+
+                # --- FUNZIONE DI PULIZIA ANTI-CRASH (SANITIZATION) ---
+                def sanitize_value(val):
+                    """
+                    Converte NaN, Infinity o valori corrotti in 0.0 o stringa vuota.
+                    Previene l'errore 'InvalidJSONError' di Google Sheets.
+                    """
+                    if val is None:
+                        return ""
+                    if isinstance(val, float):
+                        if math.isnan(val) or math.isinf(val):
+                            return 0.0
+                    return val
+
+                # 1. CONTROLLO INTESTAZIONI CATALOGO
+                # Se il foglio è nuovo o vuoto, scriviamo l'intestazione per evitare errori
+                try:
+                    if not ws_catalogo.get_all_values():
+                        ws_catalogo.append_row(["ID_PRODOTTO", "NOME_NORMALIZZATO", "BRAND", "CATEGORIA", "FORMATO", "UNITA"])
+                except Exception: 
+                    pass # Se fallisce la lettura (es. timeout), proviamo comunque a procedere
+                
+                # 2. CARICAMENTO CATALOGO ESISTENTE
+                try:
+                    cat_records = ws_catalogo.get_all_records()
+                    df_cat = pd.DataFrame(cat_records)
+                except: 
+                    df_cat = pd.DataFrame() # Se fallisce, creiamo un DF vuoto e gestiremo tutto come nuovi prodotti
                 
                 rows_scontrini = []
                 rows_catalogo_new = []
-                ids_used = []
-
+                
+                # Ciclo su tutte le righe modificate dall'utente nell'editor
                 for idx, row in edited_df.iterrows():
-                    # Logica di Normalizzazione:
-                    # Cerchiamo se esiste già questo "Nome Catalogo"
-                    norm_name = str(row["Nome Catalogo (Editabile)"]).upper().strip()
-                    brand = str(row["Marca"]).upper()
-                    cat = str(row["Cat"]).upper()
-                    fmt = float(row["Peso/Vol (Tot)"]) if row["Peso/Vol (Tot)"] else 0.0
-                    unit = str(row["Unità (KG/L/PZ)"]).upper()
                     
+                    # --- A. PREPARAZIONE E PULIZIA DATI ---
+                    norm_name = str(row["Nome Catalogo (Editabile)"]).upper().strip()
+                    brand = str(row["Marca"]).upper().strip()
+                    cat = str(row["Cat"]).upper().strip()
+                    unit = str(row["Unità (KG/L/PZ)"]).upper().strip()
+                    
+                    # Gestione sicura del formato (peso/volume)
+                    try: 
+                        fmt_str = str(row["Peso/Vol (Tot)"]).replace(',', '.')
+                        fmt = float(fmt_str) if fmt_str else 1.0
+                    except: 
+                        fmt = 1.0
+                    fmt = sanitize_value(fmt)
+                    
+                    # --- B. GESTIONE ID PRODOTTO (LOGICA RELAZIONALE) ---
                     prod_id = None
                     
-                    # Cerca nel catalogo esistente
-                    if not df_cat.empty:
+                    # 1. Cerca nel catalogo scaricato da Google
+                    if not df_cat.empty and 'NOME_NORMALIZZATO' in df_cat.columns:
                         match_prod = df_cat[df_cat['NOME_NORMALIZZATO'] == norm_name]
                         if not match_prod.empty:
-                            prod_id = match_prod.iloc[0]['ID_PRODOTTO']
+                            prod_id = str(match_prod.iloc[0]['ID_PRODOTTO'])
                     
-                    # Se non trovato, cerca nei nuovi prodotti appena creati in questo loop
+                    # 2. Cerca nei prodotti "nuovi" che stiamo creando in questo stesso ciclo
                     if not prod_id:
                         for new_p in rows_catalogo_new:
-                            if new_p[1] == norm_name: # 1 è index di NOME_NORMALIZZATO
-                                prod_id = new_p[0]
+                            # new_p[1] corrisponde al nome normalizzato nella lista che stiamo costruendo
+                            if new_p[1] == norm_name:
+                                prod_id = str(new_p[0])
                                 break
                     
-                    # Se ancora nullo, crea NUOVO PRODOTTO
+                    # 3. Se ancora nullo, crea un NUOVO ID
                     if not prod_id:
                         prod_id = generate_short_id()
-                        # Ordine col Catalogo: ID, NOME, BRAND, CAT, FORMATO, UNITA
-                        rows_catalogo_new.append([prod_id, norm_name, brand, cat, fmt, unit])
+                        # Aggiungiamo alla lista dei nuovi prodotti da scrivere su Sheets
+                        rows_catalogo_new.append([
+                            str(prod_id), 
+                            norm_name, 
+                            brand, 
+                            cat, 
+                            fmt, 
+                            unit
+                        ])
                     
-# Prepara riga Scontrino
-                    # Dobbiamo rispettare la struttura del TUO vecchio foglio per non sballare le colonne:
-                    # 1. Data, 2. Negozio, 3. Indirizzo, 4. Prodotto, 5. Totale, 
-                    # 6. Sconto(0), 7. Unitario, 8. Offerta, 9. Qtà, 10. Check("SI"), 11. ID_PRODOTTO
+                    # --- C. PREPARAZIONE RIGA SCONTRINO ---
+                    # Gestione sicura prezzi e quantità
+                    try: p_unit_str = str(row["Prezzo €"]).replace(',', '.')
+                    except: p_unit_str = "0"
+                    p_unit = float(p_unit_str) if p_unit_str else 0.0
                     
-                    prz_unit = clean_price(row["Prezzo €"])
-                    qta = float(row["Qtà"])
+                    try: qta_str = str(row["Qtà"]).replace(',', '.')
+                    except: qta_str = "1"
+                    qta = float(qta_str) if qta_str else 1.0
                     
-                    rows_scontrini.append([
-                        data_f,                         # Colonna A: Data
-                        insegna_f,                      # Colonna B: Negozio
-                        indirizzo_f,                    # Colonna C: Indirizzo
-                        str(row["Scontrino"]).upper(),  # Colonna D: Descrizione Grezza
-                        prz_unit * qta,                 # Colonna E: Totale Riga
-                        0,                              # Colonna F: (Ex Sconto/Extra) -> Manteniamo 0 per allineamento
-                        prz_unit,                       # Colonna G: Prezzo Unitario
-                        str(row["Offerta"]).upper(),    # Colonna H: In Offerta
-                        qta,                            # Colonna I: Quantità
-                        "SI",                           # Colonna J: (Ex colonna di controllo) -> Manteniamo "SI"
-                        prod_id                         # Colonna K: QUI SALVIAMO L'ID (Ex Nome Normalizzato)
-                    ])
+                    # Sanificazione finale matematica
+                    p_unit = sanitize_value(p_unit)
+                    qta = sanitize_value(qta)
+                    tot_riga = sanitize_value(p_unit * qta)
+
+                    # Costruzione della riga esatta (11 Colonne)
+                    riga_completa = [
+                        str(data_f),                        # A: Data
+                        str(insegna_f),                     # B: Negozio
+                        str(indirizzo_f),                   # C: Indirizzo
+                        str(row["Scontrino"]).upper(),      # D: Descrizione Grezza
+                        tot_riga,                           # E: Totale Riga
+                        0,                                  # F: (ex sconto, mantenuto a 0)
+                        p_unit,                             # G: Prezzo Unitario
+                        str(row["Offerta"]).upper(),        # H: Offerta
+                        qta,                                # I: Quantità
+                        "SI",                               # J: Check
+                        str(prod_id)                        # K: ID_PRODOTTO (Link al catalogo)
+                    ]
+                    rows_scontrini.append(riga_completa)
+
+                # --- D. SCRITTURA SU GOOGLE SHEETS (BATCH) ---
+                try:
+                    # Scriviamo i nuovi prodotti nel catalogo (se ce ne sono)
+                    if rows_catalogo_new:
+                        ws_catalogo.append_rows(rows_catalogo_new, value_input_option='USER_ENTERED')
                     
-                # Scrittura Batch
-                if rows_catalogo_new:
-                    ws_catalogo.append_rows(rows_catalogo_new)
-                if rows_scontrini:
-                    ws_scontrini.append_rows(rows_scontrini)
-                
-                st.success(f"✅ Fatto! Aggiunte {len(rows_scontrini)} righe e creati {len(rows_catalogo_new)} nuovi prodotti nel catalogo.")
-                st.session_state.dati_analizzati = None
-                st.rerun()
+                    # Scriviamo le righe dello scontrino
+                    if rows_scontrini:
+                        ws_scontrini.append_rows(rows_scontrini, value_input_option='USER_ENTERED')
+                        
+                    st.success(f"✅ Salvataggio riuscito! Aggiunte {len(rows_scontrini)} righe.")
+                    st.session_state.dati_analizzati = None # Reset dati
+                    
+                    # Piccola pausa per dare tempo all'API di Google di respirare
+                    time.sleep(1) 
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"⚠️ Errore durante la scrittura su Google Sheets: {e}")
+                    st.warning("Dettaglio tecnico: Controlla che non ci siano celle con formule corrotte nel foglio.")
 
 # --- TAB 2: RICERCA AVANZATA (NORMALIZZATA) ---
 with tab_cerca:
