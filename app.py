@@ -195,7 +195,7 @@ with tab_carica:
         
         edited_df = st.data_editor(df_editor, use_container_width=True, num_rows="dynamic", hide_index=True)
 
-       if st.button("💾 SALVA NEL DATABASE RELAZIONALE"):
+    if st.button("💾 SALVA NEL DATABASE RELAZIONALE"):
             with st.spinner("Salvataggio e pulizia dati in corso..."):
                 import math 
                 import time
