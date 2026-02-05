@@ -293,34 +293,18 @@ with tab_carica:
                 except Exception as e:
                     st.error(f"Errore scrittura Google: {e}")
 
-# --- TAB 2: RICERCA (Logica Relazionale) ---
+# --- TAB 2: RICERCA SINGOLA (Semplificata) ---
 with tab_cerca:
-    # Gestione Posizione
-    if st.session_state.my_lat:
-        st.success(f"📍 Posizione attiva")
-        if st.button("🔄 Resetta Posizione"):
-            st.session_state.my_lat = None; st.session_state.my_lon = None; st.rerun()
-    else:
-        with st.expander("📍 Imposta posizione", expanded=True):
-            c_gps, c_man = st.columns([1, 2])
-            with c_gps:
-                if st.button("Usa GPS"):
-                    loc = get_geolocation()
-                    if loc:
-                        st.session_state.my_lat = loc['coords']['latitude']
-                        st.session_state.my_lon = loc['coords']['longitude']
-                        st.rerun()
-            with c_man:
-                addr_in = st.text_input("Indirizzo o Città")
-                if st.button("Cerca Indirizzo"):
-                    lat, lon = get_coords_from_address(addr_in)
-                    if lat: st.session_state.my_lat, st.session_state.my_lon = lat, lon; st.rerun()
+    st.markdown("### 🔍 Ricerca Rapida")
+    
+    # Avviso se la posizione non è impostata (visto che l'abbiamo spostata nel Tab 3)
+    if not st.session_state.my_lat:
+        st.info("💡 Per vedere le distanze e i prezzi migliori vicino a te, imposta la tua posizione nel Tab 'Carrello Ottimizzato'.")
 
-    st.markdown("---")
-    query = st.text_input("🔍 Cerca Prodotto (es. Latte, Tonno, Granarolo)", key="search_norm").upper().strip()
+    query = st.text_input("Cerca Prodotto (es. Latte, Tonno)", key="search_norm").upper().strip()
     
     if query:
-        with st.spinner("Ricerca nel database normalizzato..."):
+        with st.spinner("Ricerca nel database..."):
             try:
                 data_scontrini = ws_scontrini.get_all_records()
                 data_catalogo = ws_catalogo.get_all_records()
@@ -329,12 +313,11 @@ with tab_cerca:
                     df_s = pd.DataFrame(data_scontrini)
                     df_c = pd.DataFrame(data_catalogo)
                     
-                    # Join Relazionale
+                    # Join
                     df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str)
                     df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str)
                     df_full = pd.merge(df_s, df_c, on='ID_PRODOTTO', how='inner')
                     
-                    # Filtro
                     mask = (
                         df_full['NOME_NORMALIZZATO'].str.contains(query, na=False) |
                         df_full['BRAND'].str.contains(query, na=False) |
@@ -343,12 +326,11 @@ with tab_cerca:
                     res = df_full[mask].copy()
                     
                     if not res.empty:
-                        # Calcoli Prezzi
                         res['Prezzo_Unitario'] = res['Prezzo_Unitario'].apply(clean_price)
                         res['FORMATO'] = pd.to_numeric(res['FORMATO'], errors='coerce').fillna(1)
                         res['PREZZO_AL_L_KG'] = res['Prezzo_Unitario'] / res['FORMATO']
                         
-                        # Calcolo Distanze
+                        # Calcolo Distanze (Usa la posizione se settata nel Tab 3)
                         def add_dist(row):
                             if not st.session_state.my_lat: return 999
                             addr_clean = re.sub(r'\W+', '', str(row['Indirizzo'])).upper()
@@ -361,46 +343,75 @@ with tab_cerca:
                         res['KM'] = res.apply(add_dist, axis=1)
                         res = res.sort_values(by=['PREZZO_AL_L_KG', 'KM'])
                         
-                        # Top Result
                         best = res.iloc[0]
                         u = best['UNITA']
                         st.success(f"🏆 Best: **{best['NOME_NORMALIZZATO']}** a **{best['PREZZO_AL_L_KG']:.2f} €/{u}**")
-                        st.caption(f"Presso {best['Negozio']} - {best['Data']}")
                         
-                        # Table
-                        show_cols = ['Data', 'NOME_NORMALIZZATO', 'Prezzo_Unitario', 'PREZZO_AL_L_KG', 'Negozio', 'Indirizzo', 'KM', 'In_Offerta']
-                        renames = {'NOME_NORMALIZZATO': 'Prodotto', 'Prezzo_Unitario': 'Prezzo Conf.', 'PREZZO_AL_L_KG': f'Prezzo/{u}'}
+                        show_cols = ['Data', 'NOME_NORMALIZZATO', 'Prezzo_Unitario', 'PREZZO_AL_L_KG', 'Negozio', 'Indirizzo', 'KM']
+                        renames = {'NOME_NORMALIZZATO': 'Prodotto', 'Prezzo_Unitario': 'Prezzo', 'PREZZO_AL_L_KG': f'Prezzo/{u}'}
                         
                         st.dataframe(
                             res[show_cols].rename(columns=renames), 
-                            use_container_width=True, 
-                            hide_index=True,
-                            column_config={
-                                f"Prezzo/{u}": st.column_config.NumberColumn(format="%.2f €"),
-                                "Prezzo Conf.": st.column_config.NumberColumn(format="%.2f €"),
-                                "KM": st.column_config.NumberColumn(format="%.1f km")
-                            }
+                            use_container_width=True, hide_index=True,
+                            column_config={"Prezzo": st.column_config.NumberColumn(format="%.2f €"), "KM": st.column_config.NumberColumn(format="%.1f km")}
                         )
                     else: st.warning("Nessun prodotto trovato.")
                 else: st.info("Database vuoto.")
-            except Exception as e:
-                st.error(f"Errore ricerca: {e}")
+            except Exception as e: st.error(f"Errore ricerca: {e}")
 
-# --- TAB 3: CARRELLO OTTIMIZZATO (Aggiornato) ---
+# --- TAB 3: CARRELLO OTTIMIZZATO (Completamente Aggiornato) ---
 with tab_carrello:
-    st.markdown("### 📝 La tua Lista della Spesa")
-    st.caption("Scrivi i prodotti che ti servono (uno per riga).")
     
-    col_in, col_opt = st.columns([1, 1])
+    # --- 1. SEZIONE GEOLOCALIZZAZIONE (Spostata qui) ---
+    with st.expander("📍 Imposta la tua posizione (Fondamentale per i risultati)", expanded=not st.session_state.my_lat):
+        c_gps, c_man = st.columns([1, 2])
+        with c_gps:
+            if st.button("Usa GPS"):
+                loc = get_geolocation()
+                if loc:
+                    st.session_state.my_lat = loc['coords']['latitude']
+                    st.session_state.my_lon = loc['coords']['longitude']
+                    st.rerun()
+        with c_man:
+            addr_in = st.text_input("Oppure scrivi Città/Indirizzo")
+            if st.button("Cerca Indirizzo"):
+                lat, lon = get_coords_from_address(addr_in)
+                if lat: st.session_state.my_lat, st.session_state.my_lon = lat, lon; st.rerun()
+        
+        if st.session_state.my_lat:
+            st.success("✅ Posizione impostata.")
+
+    st.markdown("---")
+    st.markdown("### 📝 La tua Lista della Spesa")
+
+    # --- 2. GESTIONE INPUT LISTA CON RESET ---
+    # Inizializziamo la session state per la text area
+    if 'cart_input_text' not in st.session_state:
+        st.session_state.cart_input_text = ""
+
+    def clear_list():
+        st.session_state.cart_input_text = ""
+
+    col_in, col_opt = st.columns([2, 1])
     with col_in:
-        # Input aumentato in altezza
-        lista_input = st.text_area("Lista prodotti:", height=200, placeholder="Latte\nUova\nTonno\nInsalata\nPane")
+        # Text area collegata alla session state
+        lista_input = st.text_area(
+            "Scrivi i prodotti (uno per riga):", 
+            height=200, 
+            placeholder="Latte\nUova\nTonno\nInsalata\nPane",
+            key="cart_input_text"
+        )
     
     with col_opt:
-        max_dist_km = st.slider("Distanza max (km)", 1, 50, 10)
-        st.write("") # Spaziatore
-        st.write("")
-        btn_calc = st.button("🚀 Calcola Convenienza", use_container_width=True)
+        max_dist_km = st.slider("Raggio (km)", 1, 50, 10)
+        st.write("") 
+        
+        # Bottoni affiancati
+        b1, b2 = st.columns(2)
+        with b1:
+            btn_calc = st.button("🚀 Calcola", use_container_width=True)
+        with b2:
+            st.button("🗑️ Svuota", on_click=clear_list, use_container_width=True)
     
     if btn_calc:
         if not lista_input.strip():
@@ -410,7 +421,7 @@ with tab_carrello:
             
             with st.spinner(f"Analisi prezzi per {len(items)} articoli..."):
                 try:
-                    # 1. Carica DB
+                    # Caricamento Dati
                     data_scontrini = ws_scontrini.get_all_records()
                     data_catalogo = ws_catalogo.get_all_records()
                     
@@ -421,13 +432,12 @@ with tab_carrello:
                     df_s = pd.DataFrame(data_scontrini)
                     df_c = pd.DataFrame(data_catalogo)
                     
-                    # Merge e Pulizia
                     df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str)
                     df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str)
                     df_full = pd.merge(df_s, df_c, on='ID_PRODOTTO', how='inner')
                     df_full['Prezzo_Unitario'] = df_full['Prezzo_Unitario'].apply(clean_price)
                     
-                    # 2. Calcola Distanze
+                    # Calcolo Distanze (una tantum per negozio)
                     unique_shops = df_full[['Negozio', 'Indirizzo']].drop_duplicates()
                     shop_distances = {}
                     
@@ -444,7 +454,7 @@ with tab_carrello:
                         else:
                             shop_distances[key] = 0
 
-                    # 3. Algoritmo
+                    # Algoritmo Carrello
                     results_per_shop = {}
                     best_prices_global = {} 
                     valid_shops = [s for s, d in shop_distances.items() if d <= max_dist_km]
@@ -453,7 +463,6 @@ with tab_carrello:
                         results_per_shop[shop_key] = {'Totale': 0.0, 'Dettagli': {}, 'Found_Count': 0}
 
                     for item in items:
-                        # Ricerca parziale
                         mask = (
                             df_full['NOME_NORMALIZZATO'].str.contains(item, na=False) |
                             df_full['CATEGORIA'].str.contains(item, na=False)
@@ -461,13 +470,10 @@ with tab_carrello:
                         df_item = df_full[mask].copy()
                         
                         if df_item.empty: continue 
-                            
-                        # Minimo Globale
-                        min_global = df_item['Prezzo_Unitario'].min()
-                        best_shop_global = df_item.loc[df_item['Prezzo_Unitario'].idxmin()]['Negozio']
-                        best_prices_global[item] = (min_global, best_shop_global)
                         
-                        # Minimo per Negozio
+                        min_global = df_item['Prezzo_Unitario'].min()
+                        best_prices_global[item] = (min_global, df_item.loc[df_item['Prezzo_Unitario'].idxmin()]['Negozio'])
+                        
                         for shop_key in valid_shops:
                             negozio, indirizzo = shop_key.split(' - ', 1)
                             df_shop_item = df_item[(df_item['Negozio'] == negozio) & (df_item['Indirizzo'] == indirizzo)]
@@ -475,12 +481,11 @@ with tab_carrello:
                             if not df_shop_item.empty:
                                 min_price = df_shop_item['Prezzo_Unitario'].min()
                                 prod_name = df_shop_item.loc[df_shop_item['Prezzo_Unitario'].idxmin()]['NOME_NORMALIZZATO']
-                                
                                 results_per_shop[shop_key]['Totale'] += min_price
                                 results_per_shop[shop_key]['Found_Count'] += 1
                                 results_per_shop[shop_key]['Dettagli'][item] = (min_price, prod_name)
                     
-                    # 4. Classifica
+                    # Generazione Classifica
                     summary = []
                     for shop, data in results_per_shop.items():
                         if data['Found_Count'] > 0:
@@ -496,6 +501,7 @@ with tab_carrello:
                     df_res = pd.DataFrame(summary)
                     
                     if not df_res.empty:
+                        # Ordinamento: Prima chi ha meno mancanti, poi prezzo più basso
                         df_res = df_res.sort_values(by=['Missing_Sort', 'Totale'])
                         best_shop = df_res.iloc[0]
                         
@@ -506,18 +512,14 @@ with tab_carrello:
                         c2.metric("Prodotti", best_shop['Prodotti Trovati'])
                         c3.metric("Distanza", f"{best_shop['Distanza']} km")
                         
-                        # --- NUOVA LOGICA DETTAGLIO: TROVATI E MANCANTI ---
-                        with st.expander("📝 Dettaglio articoli (Trovati vs Mancanti)", expanded=True):
+                        with st.expander("📝 Dettaglio articoli (Clicca per aprire)", expanded=True):
                             dettagli_shop = results_per_shop[best_shop['Negozio']]['Dettagli']
-                            
                             for item_richiesto in items:
                                 if item_richiesto in dettagli_shop:
-                                    # Articolo Trovato
-                                    prezzo, nome_db = dettagli_shop[item_richiesto]
-                                    st.markdown(f"✅ **{item_richiesto}**: € {prezzo:.2f} <span style='color:grey; font-size:0.8em'>({nome_db})</span>", unsafe_allow_html=True)
+                                    p, n = dettagli_shop[item_richiesto]
+                                    st.markdown(f"✅ **{item_richiesto}**: € {p:.2f} <span style='color:grey'>({n})</span>", unsafe_allow_html=True)
                                 else:
-                                    # Articolo Mancante
-                                    st.markdown(f"❌ **{item_richiesto}**: _Non disponibile in questo punto vendita_", unsafe_allow_html=True)
+                                    st.markdown(f"❌ **{item_richiesto}**: _Non disponibile_", unsafe_allow_html=True)
 
                         # --- STRATEGIA MIX ---
                         if len(best_prices_global) == len(items):
@@ -526,46 +528,30 @@ with tab_carrello:
                             if saving > 0.50:
                                 st.info(f"⚡ Se giri più negozi spendi **€ {tot_mix:.2f}** (Risparmi € {saving:.2f})")
 
-                        # --- NUOVA CLASSIFICA ESPANDIBILE ---
+                        # --- CLASSIFICA COMPLETA (Numerica e senza limiti) ---
                         st.markdown("---")
-                        st.markdown("### 📊 Classifica completa (Clicca per dettagli)")
+                        st.markdown("### 📊 Classifica completa")
                         
-                        # Iteriamo su ogni riga della classifica
                         for index, row in df_res.iterrows():
                             shop_name = row['Negozio']
                             totale = row['Totale']
                             trovati = row['Prodotti Trovati']
                             distanza = row['Distanza']
                             
-                            # Creiamo un titolo formattato per il box
-                            # Esempio: #1 | IPERFAMILA... | € 13.50 | Trovati: 4/5 | 2.5 km
-                            rank_icon = "🥇" if index == 0 else "🥈" if index == 1 else "🥉" if index == 2 else f"#{index+1}"
-                            label_expander = f"{rank_icon} **€ {totale:.2f}** | {trovati} art. | {distanza} km | {shop_name}"
+                            # NUOVO FORMAT: #1, #2 invece delle medaglie
+                            label_expander = f"#{index+1} | € {totale:.2f} | {trovati} art. | {distanza} km | {shop_name}"
                             
                             with st.expander(label_expander):
-                                # Qui riusiamo la stessa logica visuale del box vincitore
                                 dettagli_shop = results_per_shop[shop_name]['Dettagli']
-                                
-                                # Griglia per allineare meglio
-                                st.markdown(f"**Dettaglio Articoli:**")
-                                
                                 for item_richiesto in items:
                                     if item_richiesto in dettagli_shop:
-                                        # Articolo Trovato (Verde)
-                                        prezzo, nome_db = dettagli_shop[item_richiesto]
-                                        st.markdown(f"✅ **{item_richiesto}**: € {prezzo:.2f} <span style='color:grey; font-size:0.8em'>({nome_db})</span>", unsafe_allow_html=True)
+                                        p, n = dettagli_shop[item_richiesto]
+                                        st.markdown(f"✅ **{item_richiesto}**: € {p:.2f} <span style='color:grey'>({n})</span>", unsafe_allow_html=True)
                                     else:
-                                        # Articolo Mancante (Rosso)
                                         st.markdown(f"❌ **{item_richiesto}**: _Non disponibile_", unsafe_allow_html=True)
-                                
-                                # Se mancano prodotti, mostriamo un avviso
-                                count_trovati = int(trovati.split('/')[0])
-                                count_totali = int(trovati.split('/')[1])
-                                if count_trovati < count_totali:
-                                    st.caption("⚠️ Il totale calcolato include solo i prodotti disponibili. Considera che dovrai comprare altrove quelli mancanti.")
 
                     else:
-                        st.warning("Nessun negozio ha questi prodotti.")
+                        st.warning("Nessun negozio trovato con questi prodotti.")
 
                 except Exception as e:
                     st.error(f"Errore: {e}")
