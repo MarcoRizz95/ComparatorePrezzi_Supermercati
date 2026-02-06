@@ -359,10 +359,10 @@ with tab_cerca:
                 else: st.info("Database vuoto.")
             except Exception as e: st.error(f"Errore ricerca: {e}")
 
-# --- TAB 3: CARRELLO OTTIMIZZATO (Completamente Aggiornato) ---
+# --- TAB 3: CARRELLO OTTIMIZZATO (Fix Spazi Vuoti + Indici) ---
 with tab_carrello:
     
-    # --- 1. SEZIONE GEOLOCALIZZAZIONE (Spostata qui) ---
+    # --- 1. SEZIONE GEOLOCALIZZAZIONE ---
     with st.expander("📍 Imposta la tua posizione (Fondamentale per i risultati)", expanded=not st.session_state.my_lat):
         c_gps, c_man = st.columns([1, 2])
         with c_gps:
@@ -385,7 +385,6 @@ with tab_carrello:
     st.markdown("### 📝 La tua Lista della Spesa")
 
     # --- 2. GESTIONE INPUT LISTA CON RESET ---
-    # Inizializziamo la session state per la text area
     if 'cart_input_text' not in st.session_state:
         st.session_state.cart_input_text = ""
 
@@ -394,7 +393,6 @@ with tab_carrello:
 
     col_in, col_opt = st.columns([2, 1])
     with col_in:
-        # Text area collegata alla session state
         lista_input = st.text_area(
             "Scrivi i prodotti (uno per riga):", 
             height=200, 
@@ -403,10 +401,9 @@ with tab_carrello:
         )
     
     with col_opt:
-        max_dist_km = st.slider("Raggio (km)", 1, 50, 10)
+        max_dist_km = st.slider("Raggio (km)", 1, 100, 20)
         st.write("") 
         
-        # Bottoni affiancati
         b1, b2 = st.columns(2)
         with b1:
             btn_calc = st.button("🚀 Calcola", use_container_width=True)
@@ -432,12 +429,23 @@ with tab_carrello:
                     df_s = pd.DataFrame(data_scontrini)
                     df_c = pd.DataFrame(data_catalogo)
                     
-                    df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str)
-                    df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str)
+                    # --- FIX FONDAMENTALE: PULIZIA SPAZI BIANCHI ---
+                    # 1. Pulisce i nomi delle colonne (se per caso c'è "ID_PRODOTTO " con spazio)
+                    df_s.columns = [c.strip() for c in df_s.columns]
+                    df_c.columns = [c.strip() for c in df_c.columns]
+                    
+                    # 2. Pulisce i valori degli ID (toglie spazi invisibili prima e dopo)
+                    df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str).str.strip()
+                    df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str).str.strip()
+                    # -----------------------------------------------
+
+                    # Merge
                     df_full = pd.merge(df_s, df_c, on='ID_PRODOTTO', how='inner')
+                    
+                    # Pulizia Prezzi
                     df_full['Prezzo_Unitario'] = df_full['Prezzo_Unitario'].apply(clean_price)
                     
-                    # Calcolo Distanze (una tantum per negozio)
+                    # Calcolo Distanze
                     unique_shops = df_full[['Negozio', 'Indirizzo']].drop_duplicates()
                     shop_distances = {}
                     
@@ -463,6 +471,7 @@ with tab_carrello:
                         results_per_shop[shop_key] = {'Totale': 0.0, 'Dettagli': {}, 'Found_Count': 0}
 
                     for item in items:
+                        # Ricerca estesa (Case insensitive e parziale)
                         mask = (
                             df_full['NOME_NORMALIZZATO'].str.contains(item, na=False) |
                             df_full['CATEGORIA'].str.contains(item, na=False)
@@ -501,8 +510,10 @@ with tab_carrello:
                     df_res = pd.DataFrame(summary)
                     
                     if not df_res.empty:
-                        # Ordinamento: Prima chi ha meno mancanti, poi prezzo più basso
+                        # Ordinamento e Reset Indice
                         df_res = df_res.sort_values(by=['Missing_Sort', 'Totale'])
+                        df_res = df_res.reset_index(drop=True) 
+                        
                         best_shop = df_res.iloc[0]
                         
                         # --- BOX VINCITORE ---
@@ -528,7 +539,7 @@ with tab_carrello:
                             if saving > 0.50:
                                 st.info(f"⚡ Se giri più negozi spendi **€ {tot_mix:.2f}** (Risparmi € {saving:.2f})")
 
-                        # --- CLASSIFICA COMPLETA (Numerica e senza limiti) ---
+                        # --- CLASSIFICA COMPLETA ---
                         st.markdown("---")
                         st.markdown("### 📊 Classifica completa")
                         
@@ -538,7 +549,6 @@ with tab_carrello:
                             trovati = row['Prodotti Trovati']
                             distanza = row['Distanza']
                             
-                            # NUOVO FORMAT: #1, #2 invece delle medaglie
                             label_expander = f"#{index+1} | € {totale:.2f} | {trovati} art. | {distanza} km | {shop_name}"
                             
                             with st.expander(label_expander):
