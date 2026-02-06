@@ -79,7 +79,7 @@ if 'my_lon' not in st.session_state: st.session_state.my_lon = None
 # Chiave per resettare l'uploader dopo il salvataggio
 if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
-st.title("🛍️ Spesa Normalizzata & Geolocalizzata - VERSIONE TEST")
+st.title("🛍️ Spesa Normalizzata & Geolocalizzata - VERSIONE PROD.")
 
 tab_carica, tab_cerca, tab_carrello = st.tabs(["📷 CARICA", "🔍 CERCA PRODOTTO", "🛒 CARRELLO OTTIMIZZATO"])
 
@@ -293,18 +293,34 @@ with tab_carica:
                 except Exception as e:
                     st.error(f"Errore scrittura Google: {e}")
 
-# --- TAB 2: RICERCA SINGOLA (Semplificata) ---
+# --- TAB 2: RICERCA (Logica Relazionale) ---
 with tab_cerca:
-    st.markdown("### 🔍 Ricerca Rapida")
-    
-    # Avviso se la posizione non è impostata (visto che l'abbiamo spostata nel Tab 3)
-    if not st.session_state.my_lat:
-        st.info("💡 Per vedere le distanze e i prezzi migliori vicino a te, imposta la tua posizione nel Tab 'Carrello Ottimizzato'.")
+    # Gestione Posizione
+    if st.session_state.my_lat:
+        st.success(f"📍 Posizione attiva")
+        if st.button("🔄 Resetta Posizione"):
+            st.session_state.my_lat = None; st.session_state.my_lon = None; st.rerun()
+    else:
+        with st.expander("📍 Imposta posizione", expanded=True):
+            c_gps, c_man = st.columns([1, 2])
+            with c_gps:
+                if st.button("Usa GPS"):
+                    loc = get_geolocation()
+                    if loc:
+                        st.session_state.my_lat = loc['coords']['latitude']
+                        st.session_state.my_lon = loc['coords']['longitude']
+                        st.rerun()
+            with c_man:
+                addr_in = st.text_input("Indirizzo o Città")
+                if st.button("Cerca Indirizzo"):
+                    lat, lon = get_coords_from_address(addr_in)
+                    if lat: st.session_state.my_lat, st.session_state.my_lon = lat, lon; st.rerun()
 
-    query = st.text_input("Cerca Prodotto (es. Latte, Tonno)", key="search_norm").upper().strip()
+    st.markdown("---")
+    query = st.text_input("🔍 Cerca Prodotto (es. Latte, Tonno, Granarolo)", key="search_norm").upper().strip()
     
     if query:
-        with st.spinner("Ricerca nel database..."):
+        with st.spinner("Ricerca nel database normalizzato..."):
             try:
                 data_scontrini = ws_scontrini.get_all_records()
                 data_catalogo = ws_catalogo.get_all_records()
@@ -313,11 +329,12 @@ with tab_cerca:
                     df_s = pd.DataFrame(data_scontrini)
                     df_c = pd.DataFrame(data_catalogo)
                     
-                    # Join
+                    # Join Relazionale
                     df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str)
                     df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str)
                     df_full = pd.merge(df_s, df_c, on='ID_PRODOTTO', how='inner')
                     
+                    # Filtro
                     mask = (
                         df_full['NOME_NORMALIZZATO'].str.contains(query, na=False) |
                         df_full['BRAND'].str.contains(query, na=False) |
@@ -326,11 +343,12 @@ with tab_cerca:
                     res = df_full[mask].copy()
                     
                     if not res.empty:
+                        # Calcoli Prezzi
                         res['Prezzo_Unitario'] = res['Prezzo_Unitario'].apply(clean_price)
                         res['FORMATO'] = pd.to_numeric(res['FORMATO'], errors='coerce').fillna(1)
                         res['PREZZO_AL_L_KG'] = res['Prezzo_Unitario'] / res['FORMATO']
                         
-                        # Calcolo Distanze (Usa la posizione se settata nel Tab 3)
+                        # Calcolo Distanze
                         def add_dist(row):
                             if not st.session_state.my_lat: return 999
                             addr_clean = re.sub(r'\W+', '', str(row['Indirizzo'])).upper()
@@ -343,38 +361,48 @@ with tab_cerca:
                         res['KM'] = res.apply(add_dist, axis=1)
                         res = res.sort_values(by=['PREZZO_AL_L_KG', 'KM'])
                         
+                        # Top Result
                         best = res.iloc[0]
                         u = best['UNITA']
                         st.success(f"🏆 Best: **{best['NOME_NORMALIZZATO']}** a **{best['PREZZO_AL_L_KG']:.2f} €/{u}**")
+                        st.caption(f"Presso {best['Negozio']} - {best['Data']}")
                         
-                        show_cols = ['Data', 'NOME_NORMALIZZATO', 'Prezzo_Unitario', 'PREZZO_AL_L_KG', 'Negozio', 'Indirizzo', 'KM']
-                        renames = {'NOME_NORMALIZZATO': 'Prodotto', 'Prezzo_Unitario': 'Prezzo', 'PREZZO_AL_L_KG': f'Prezzo/{u}'}
+                        # Table
+                        show_cols = ['Data', 'NOME_NORMALIZZATO', 'Prezzo_Unitario', 'PREZZO_AL_L_KG', 'Negozio', 'Indirizzo', 'KM', 'In_Offerta']
+                        renames = {'NOME_NORMALIZZATO': 'Prodotto', 'Prezzo_Unitario': 'Prezzo Conf.', 'PREZZO_AL_L_KG': f'Prezzo/{u}'}
                         
                         st.dataframe(
                             res[show_cols].rename(columns=renames), 
-                            use_container_width=True, hide_index=True,
-                            column_config={"Prezzo": st.column_config.NumberColumn(format="%.2f €"), "KM": st.column_config.NumberColumn(format="%.1f km")}
+                            use_container_width=True, 
+                            hide_index=True,
+                            column_config={
+                                f"Prezzo/{u}": st.column_config.NumberColumn(format="%.2f €"),
+                                "Prezzo Conf.": st.column_config.NumberColumn(format="%.2f €"),
+                                "KM": st.column_config.NumberColumn(format="%.1f km")
+                            }
                         )
                     else: st.warning("Nessun prodotto trovato.")
                 else: st.info("Database vuoto.")
-            except Exception as e: st.error(f"Errore ricerca: {e}")
-
-# --- TAB 3: CARRELLO OTTIMIZZATO (Fix Spazi Vuoti + Indici) ---
+            except Exception as e:
+                st.error(f"Errore ricerca: {e}")
+# --- TAB 3: CARRELLO OTTIMIZZATO (Fix Duplicate ID) ---
 with tab_carrello:
     
     # --- 1. SEZIONE GEOLOCALIZZAZIONE ---
     with st.expander("📍 Imposta la tua posizione (Fondamentale per i risultati)", expanded=not st.session_state.my_lat):
         c_gps, c_man = st.columns([1, 2])
         with c_gps:
-            if st.button("Usa GPS"):
+            # AGGIUNTO key="gps_tab3" per evitare l'errore DuplicateElementId
+            if st.button("Usa GPS", key="gps_tab3"):
                 loc = get_geolocation()
                 if loc:
                     st.session_state.my_lat = loc['coords']['latitude']
                     st.session_state.my_lon = loc['coords']['longitude']
                     st.rerun()
         with c_man:
-            addr_in = st.text_input("Oppure scrivi Città/Indirizzo")
-            if st.button("Cerca Indirizzo"):
+            addr_in = st.text_input("Oppure scrivi Città/Indirizzo", key="addr_input_tab3")
+            # AGGIUNTO key="addr_btn_tab3" per evitare l'errore
+            if st.button("Cerca Indirizzo", key="addr_btn_tab3"):
                 lat, lon = get_coords_from_address(addr_in)
                 if lat: st.session_state.my_lat, st.session_state.my_lon = lat, lon; st.rerun()
         
@@ -401,14 +429,14 @@ with tab_carrello:
         )
     
     with col_opt:
-        max_dist_km = st.slider("Raggio (km)", 1, 100, 20)
+        max_dist_km = st.slider("Raggio (km)", 1, 100, 25)
         st.write("") 
         
         b1, b2 = st.columns(2)
         with b1:
-            btn_calc = st.button("🚀 Calcola", use_container_width=True)
+            btn_calc = st.button("🚀 Calcola", use_container_width=True, key="calc_tab3")
         with b2:
-            st.button("🗑️ Svuota", on_click=clear_list, use_container_width=True)
+            st.button("🗑️ Svuota", on_click=clear_list, use_container_width=True, key="clear_tab3")
     
     if btn_calc:
         if not lista_input.strip():
@@ -416,7 +444,7 @@ with tab_carrello:
         else:
             items = [x.strip().upper() for x in lista_input.split('\n') if x.strip()]
             
-            with st.spinner(f"Analisi prezzi per {len(items)} articoli..."):
+            with st.spinner(f"Ottimizzazione spesa per {len(items)} articoli..."):
                 try:
                     # Caricamento Dati
                     data_scontrini = ws_scontrini.get_all_records()
@@ -429,20 +457,15 @@ with tab_carrello:
                     df_s = pd.DataFrame(data_scontrini)
                     df_c = pd.DataFrame(data_catalogo)
                     
-                    # --- FIX FONDAMENTALE: PULIZIA SPAZI BIANCHI ---
-                    # 1. Pulisce i nomi delle colonne (se per caso c'è "ID_PRODOTTO " con spazio)
-                    df_s.columns = [c.strip() for c in df_s.columns]
+                    # --- PULIZIA DATA TYPES E SPAZI ---
+                    df_s.columns = [c.strip() for c in df_s.columns] # Pulisce nomi colonne
                     df_c.columns = [c.strip() for c in df_c.columns]
                     
-                    # 2. Pulisce i valori degli ID (toglie spazi invisibili prima e dopo)
                     df_s['ID_PRODOTTO'] = df_s['ID_PRODOTTO'].astype(str).str.strip()
                     df_c['ID_PRODOTTO'] = df_c['ID_PRODOTTO'].astype(str).str.strip()
-                    # -----------------------------------------------
-
+                    
                     # Merge
                     df_full = pd.merge(df_s, df_c, on='ID_PRODOTTO', how='inner')
-                    
-                    # Pulizia Prezzi
                     df_full['Prezzo_Unitario'] = df_full['Prezzo_Unitario'].apply(clean_price)
                     
                     # Calcolo Distanze
@@ -471,7 +494,7 @@ with tab_carrello:
                         results_per_shop[shop_key] = {'Totale': 0.0, 'Dettagli': {}, 'Found_Count': 0}
 
                     for item in items:
-                        # Ricerca estesa (Case insensitive e parziale)
+                        # Ricerca Flessibile
                         mask = (
                             df_full['NOME_NORMALIZZATO'].str.contains(item, na=False) |
                             df_full['CATEGORIA'].str.contains(item, na=False)
@@ -510,7 +533,7 @@ with tab_carrello:
                     df_res = pd.DataFrame(summary)
                     
                     if not df_res.empty:
-                        # Ordinamento e Reset Indice
+                        # Ordinamento e RESET INDICE
                         df_res = df_res.sort_values(by=['Missing_Sort', 'Totale'])
                         df_res = df_res.reset_index(drop=True) 
                         
@@ -532,12 +555,24 @@ with tab_carrello:
                                 else:
                                     st.markdown(f"❌ **{item_richiesto}**: _Non disponibile_", unsafe_allow_html=True)
 
-                        # --- STRATEGIA MIX ---
+                        
+                        # --- STRATEGIA MIX (Migliorata con Dettagli) ---
+                        # Calcoliamo il mix solo se abbiamo trovato TUTTI i prodotti almeno da qualche parte
                         if len(best_prices_global) == len(items):
                             tot_mix = sum([x[0] for x in best_prices_global.values()])
                             saving = best_shop['Totale'] - tot_mix
+                            
+                            # Mostriamo solo se c'è un risparmio reale (es. > 50 cent)
                             if saving > 0.50:
-                                st.info(f"⚡ Se giri più negozi spendi **€ {tot_mix:.2f}** (Risparmi € {saving:.2f})")
+                                msg_mix = f"⚡ Se giri più negozi spendi **€ {tot_mix:.2f}** (Risparmi € {saving:.2f})"
+                                with st.expander(msg_mix):
+                                    st.markdown("Ecco dove ti conviene comprare ogni singolo articolo:")
+                                    for item, (price, shop) in best_prices_global.items():
+                                        # Evidenziamo se il negozio del mix è diverso dal vincitore principale
+                                        if shop != best_shop['Negozio']:
+                                            st.markdown(f"📍 **{item}**: € {price:.2f} da **{shop}**")
+                                        else:
+                                            st.markdown(f"🔹 **{item}**: € {price:.2f} (Qui da {shop})")
 
                         # --- CLASSIFICA COMPLETA ---
                         st.markdown("---")
@@ -561,7 +596,7 @@ with tab_carrello:
                                         st.markdown(f"❌ **{item_richiesto}**: _Non disponibile_", unsafe_allow_html=True)
 
                     else:
-                        st.warning("Nessun negozio trovato con questi prodotti.")
+                        st.warning("Nessun negozio trovato con questi prodotti nel raggio selezionato.")
 
                 except Exception as e:
                     st.error(f"Errore: {e}")
